@@ -133,23 +133,49 @@ int insert_text_x11(const char* text) {
         return 1;
     }
 
+    // Retrieve the range of keycodes used by the keyboard
+    int min_keycode, max_keycode;
+    XDisplayKeycodes(display, &min_keycode, &max_keycode);
+
+    // Get the keyboard mapping
+    int keysyms_per_keycode;
+    KeySym *keymap = XGetKeyboardMapping(display, min_keycode, max_keycode - min_keycode + 1, &keysyms_per_keycode);
+
     // Simulate keypresses for each character in the string
     for (const char *p = text; *p != '\0'; p++) {
-        KeySym ks;
-        int shift_pressed = 0;
+        KeySym ks = XStringToKeysym((char[]){*p, 0});
 
-        // Handle special characters and space
-        if (*p == ' ') {
-            ks = XK_space;
-        } else if (isupper(*p) || strchr("!@#$%^&*()_+{}|:\"<>?", *p)) {
-            shift_pressed = 1;
-            ks = XStringToKeysym((char[]){tolower(*p), 0});
-        } else {
-            ks = XStringToKeysym((char[]){*p, 0});
+        // If XStringToKeysym fails, search the keymap
+        if (ks == NoSymbol) {
+            for (int i = 0; i < (max_keycode - min_keycode + 1) * keysyms_per_keycode; ++i) {
+                if (keymap[i] == *p) {
+                    ks = keymap[i];
+                    break;
+                }
+            }
         }
 
         if (ks == NoSymbol) {
             fprintf(stderr, "No symbol for %c\n", *p);
+            continue;
+        }
+
+        // Search for the keysym in the keyboard mapping
+        KeyCode keycode = 0;
+        int shift_pressed = 0;
+        for (int kc = min_keycode; kc <= max_keycode; ++kc) {
+            for (int i = 0; i < keysyms_per_keycode; ++i) {
+                if (keymap[(kc - min_keycode) * keysyms_per_keycode + i] == ks) {
+                    keycode = kc;
+                    shift_pressed = (i % 2 == 1); // Assumes shift is the only modifier
+                    goto found;
+                }
+            }
+        }
+
+        found:
+        if (!keycode) {
+            fprintf(stderr, "No keycode found for symbol %lu\n", (unsigned long)ks);
             continue;
         }
 
@@ -159,8 +185,7 @@ int insert_text_x11(const char* text) {
             XTestFakeKeyEvent(display, shift_keycode, True, 0);
         }
 
-        // Convert character to keycode and simulate keypress
-        KeyCode keycode = XKeysymToKeycode(display, ks);
+        // Simulate keypress
         XTestFakeKeyEvent(display, keycode, True, 0);  // key press
         XTestFakeKeyEvent(display, keycode, False, 0); // key release
 
@@ -169,8 +194,12 @@ int insert_text_x11(const char* text) {
             KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
             XTestFakeKeyEvent(display, shift_keycode, False, 0);
         }
+
+        // Flush the output buffer
+        XFlush(display);
     }
 
+    XFree(keymap);
     XCloseDisplay(display);
     return 0;
 }
