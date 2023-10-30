@@ -14,7 +14,7 @@
 
 int disable_echo(int fd, struct termios *original_termios);
 int restore_echo(int fd, struct termios *original_termios);
-void insert_text_tty(int argc, char *argv[]);
+int insert_text_tty(int argc, char *argv[]);
 int insert_text_x11(const char* text);
 
 int main(int argc, char *argv[]) {
@@ -86,7 +86,7 @@ int restore_echo(int fd, struct termios *original_termios) {
 	return 0;
 }
 
-void insert_text_tty(int argc, char *argv[]) {
+int insert_text_tty(int argc, char *argv[]) {
 	int fd = open("/dev/tty", O_RDWR);
 	if (fd == -1) {
 		perror("open");
@@ -119,6 +119,7 @@ void insert_text_tty(int argc, char *argv[]) {
 	}
 
 	close(fd);
+	return 0;
 }
 
 #ifdef GUI_SUPPORT
