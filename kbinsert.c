@@ -127,35 +127,51 @@ int insert_text_tty(int argc, char *argv[]) {
 
 #ifdef GUI_SUPPORT
 int insert_text_x11(const char* text) {
-	Display *display = XOpenDisplay(NULL);
-	if (!display) {
-		fprintf(stderr, "Cannot open display\n");
-		return 1;
-	}
+    Display *display = XOpenDisplay(NULL);
+    if (!display) {
+        fprintf(stderr, "Cannot open display\n");
+        return 1;
+    }
 
-	// Simulate keypresses for each character in the string
-	for (const char *p = text; *p != '\0'; p++) {
-		int shift_pressed = 0;
+    // Simulate keypresses for each character in the string
+    for (const char *p = text; *p != '\0'; p++) {
+        KeySym ks;
+        int shift_pressed = 0;
 
-		// Check if character requires Shift key
-		if (isupper(*p) || strchr("!@#$%^&*()_+{}|:\"<>?", *p)) {
-			KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
-			XTestFakeKeyEvent(display, shift_keycode, True, 0); // Shift key press
-			shift_pressed = 1;
-		}
+        // Handle special characters and space
+        if (*p == ' ') {
+            ks = XK_space;
+        } else if (isupper(*p) || strchr("!@#$%^&*()_+{}|:\"<>?", *p)) {
+            shift_pressed = 1;
+            ks = XStringToKeysym((char[]){tolower(*p), 0});
+        } else {
+            ks = XStringToKeysym((char[]){*p, 0});
+        }
 
-		// Convert character to keycode and simulate keypress
-		KeyCode keycode = XKeysymToKeycode(display, XStringToKeysym((char[]){*p, 0}));
-		XTestFakeKeyEvent(display, keycode, True, 0);  // key press
-		XTestFakeKeyEvent(display, keycode, False, 0); // key release
+        if (ks == NoSymbol) {
+            fprintf(stderr, "No symbol for %c\n", *p);
+            continue;
+        }
 
-		if (shift_pressed) {
-			KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
-			XTestFakeKeyEvent(display, shift_keycode, False, 0); // Shift key release
-		}
-	}
+        // Press Shift if needed
+        if (shift_pressed) {
+            KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
+            XTestFakeKeyEvent(display, shift_keycode, True, 0);
+        }
 
-	XCloseDisplay(display);
-	return 0;
+        // Convert character to keycode and simulate keypress
+        KeyCode keycode = XKeysymToKeycode(display, ks);
+        XTestFakeKeyEvent(display, keycode, True, 0);  // key press
+        XTestFakeKeyEvent(display, keycode, False, 0); // key release
+
+        // Release Shift if it was pressed
+        if (shift_pressed) {
+            KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
+            XTestFakeKeyEvent(display, shift_keycode, False, 0);
+        }
+    }
+
+    XCloseDisplay(display);
+    return 0;
 }
 #endif
