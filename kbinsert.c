@@ -5,11 +5,14 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <ctype.h>
 
 /* Coded by Chat GPT4 (then modified by me) */
 #ifdef GUI_SUPPORT
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
+/* #include <X11/keysymdef.h> */
+#include <X11/keysym.h>
 #endif
 
 int disable_echo(int fd, struct termios *original_termios);
@@ -124,23 +127,35 @@ int insert_text_tty(int argc, char *argv[]) {
 
 #ifdef GUI_SUPPORT
 int insert_text_x11(const char* text) {
-    Display *display = XOpenDisplay(NULL);
-    if (!display) {
-        fprintf(stderr, "Cannot open display\n");
-        return 1;
-    }
+	Display *display = XOpenDisplay(NULL);
+	if (!display) {
+		fprintf(stderr, "Cannot open display\n");
+		return 1;
+	}
 
-    // Simulate keypresses for each character in the string
-    for (const char *p = text; *p != '\0'; p++) {
-        // Convert character to keycode and simulate keypress
-        // This is a simplified example; real implementation may need to handle
-        // special characters, modifiers, etc.
-        KeyCode keycode = XKeysymToKeycode(display, (unsigned int)*p);
-        XTestFakeKeyEvent(display, keycode, True, 0);  // key press
-        XTestFakeKeyEvent(display, keycode, False, 0); // key release
-    }
+	// Simulate keypresses for each character in the string
+	for (const char *p = text; *p != '\0'; p++) {
+		int shift_pressed = 0;
 
-    XCloseDisplay(display);
-    return 0;
+		// Check if character requires Shift key
+		if (isupper(*p) || strchr("!@#$%^&*()_+{}|:\"<>?", *p)) {
+			KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
+			XTestFakeKeyEvent(display, shift_keycode, True, 0); // Shift key press
+			shift_pressed = 1;
+		}
+
+		// Convert character to keycode and simulate keypress
+		KeyCode keycode = XKeysymToKeycode(display, XStringToKeysym((char[]){*p, 0}));
+		XTestFakeKeyEvent(display, keycode, True, 0);  // key press
+		XTestFakeKeyEvent(display, keycode, False, 0); // key release
+
+		if (shift_pressed) {
+			KeyCode shift_keycode = XKeysymToKeycode(display, XK_Shift_L);
+			XTestFakeKeyEvent(display, shift_keycode, False, 0); // Shift key release
+		}
+	}
+
+	XCloseDisplay(display);
+	return 0;
 }
 #endif
