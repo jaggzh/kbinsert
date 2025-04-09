@@ -106,7 +106,8 @@ int insert_text_tty(int argc, char *argv[]) {
 	for (size_t ai=1; ai < argc; ai++) {
 		const char *s=argv[ai];
 		if (ai > 1) ioctl(fd, TIOCSTI, " "); // space-sep
-		for (size_t i=0; i<strlen(s); i++) {
+		size_t slen=strlen(s);
+		for (size_t i=0; i<slen; i++) {
 			if (ioctl(fd, TIOCSTI, s+i) == -1) {
 				perror("ioctl");
 				restore_echo(fd, &original_termios);
