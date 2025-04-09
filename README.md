@@ -13,7 +13,7 @@ total 16
 -rw-r--r-- 1 897 Apr  9 07:13 README.md
 -rw-r--r-- 1 110 Apr  9 07:13 some-prj
 -rw-r--r-- 1 291 Apr  9 07:13 some-prj.c
-/path/some-project$ vi some-prj.c
+/path/some-project$ vi some-prj.c  # The cursor is left here without the command run.
 ```
 
 Then I hit ENTER to edit, or ^U to do some other management there.
