@@ -17,16 +17,20 @@
 
 int disable_echo(int fd, struct termios *original_termios);
 int restore_echo(int fd, struct termios *original_termios);
-int insert_text_tty(int argc, char *argv[], int escape_mode);
-int insert_text_x11(const char* text, int escape_mode);
-char* process_escape_sequences(const char* input, int* error);
+int insert_char_tty(char c);
+int insert_string_tty(const char* str);
+int insert_string_tty_with_escapes(const char* str);
+#ifdef GUI_SUPPORT
+int insert_string_x11(const char* str, int escape_mode);
+#endif
 
 int main(int argc, char *argv[]) {
 	int gui_mode = 0;
 	int escape_mode = 0;
+	int option_end = 0; // Flag to indicate if -- was encountered
 	
 	if (argc < 2) {
-		printf("Usage: %s [-g] [-e|--escapes] <str> [...<strN>>]\n"
+		printf("Usage: %s [-g] [-e|--escapes] [--] <str> [...<strN>>]\n"
 		       "Insert strings in keyboard buffer (as if you typed them).\n"
 		       "Multiple command line arguments are treated as one long\n"
 		       "space-separated string.inserted,\n"
@@ -38,6 +42,8 @@ int main(int argc, char *argv[]) {
 		       "             \\xhh  - hex value (exactly 2 digits)\n"
 		       "             \\^c   - control character (c can be upper or lowercase)\n"
 		       "             \\\\    - literal backslash\n"
+		       "--          End option processing (following arguments starting with - will be\n"
+		       "             treated as text to insert, not as options)\n"
 		       "",
 			argv[0]);
 		return 1;
@@ -45,13 +51,28 @@ int main(int argc, char *argv[]) {
 	
 	// Process arguments
 	int start_index = 1;
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-g") == 0) {
+	
+	for (int i = 1; i < argc && !option_end; i++) {
+		if (strcmp(argv[i], "--") == 0) {
+			// Found end-of-options marker
+			option_end = 1;
+			start_index = i + 1; // Start after the -- marker
+			break; // Exit the loop immediately
+		} else if (strcmp(argv[i], "-g") == 0) {
 			gui_mode = 1;
 			if (i == start_index) start_index++;
 		} else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--escapes") == 0) {
 			escape_mode = 1;
 			if (i == start_index) start_index++;
+		} else if (argv[i][0] == '-') {
+			// Unknown option
+			fprintf(stderr, "Unknown option: %s\n", argv[i]);
+			fprintf(stderr, "Use -- to insert text starting with -\n");
+			return 1;
+		} else {
+			// Found the first non-option argument
+			start_index = i;
+			break;
 		}
 	}
 	
@@ -61,31 +82,84 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	
-	if (gui_mode) {
-#ifdef GUI_SUPPORT
-		for (int i = start_index; i < argc; i++) {
-			// Skip option arguments
-			if (strcmp(argv[i], "-g") == 0 || 
-				strcmp(argv[i], "-e") == 0 || 
-				strcmp(argv[i], "--escapes") == 0) {
-				continue;
-			}
-			if (insert_text_x11(argv[i], escape_mode) != 0) {
-				return 1;
-			}
-			// Add space between arguments except after the last one
-			if (i < argc - 1) {
-				insert_text_x11(" ", 0); // No need to process escape in a space
-			}
+	// Initialize for TTY mode if needed
+	int fd = -1;
+	struct termios original_termios;
+	
+	if (!gui_mode) {
+		fd = open("/dev/tty", O_RDWR);
+		if (fd == -1) {
+			perror("open");
+			return 1;
 		}
-#else
+		
+		if (disable_echo(fd, &original_termios)) {
+			close(fd);
+			return 1;
+		}
+	} else {
+#ifndef GUI_SUPPORT
 		fprintf(stderr, "GUI support not compiled in\n");
 		return 1;
 #endif
-	} else {
-		return insert_text_tty(argc, argv, escape_mode);
 	}
-	return 0;
+	
+	int result = 0;
+	
+	// Process each argument starting from start_index
+	for (int i = start_index; i < argc; i++) {
+		const char *arg = argv[i];
+		
+		// Add space between arguments (but not before the first)
+		if (i > start_index) {
+			if (gui_mode) {
+#ifdef GUI_SUPPORT
+				if (insert_string_x11(" ", 0) != 0) {
+					result = 1;
+					break;
+				}
+#endif
+			} else {
+				if (insert_char_tty(' ') != 0) {
+					result = 1;
+					break;
+				}
+			}
+		}
+		
+		// Insert the current argument
+		if (gui_mode) {
+#ifdef GUI_SUPPORT
+			if (insert_string_x11(arg, escape_mode) != 0) {
+				result = 1;
+				break;
+			}
+#endif
+		} else {
+			if (escape_mode) {
+				if (insert_string_tty_with_escapes(arg) != 0) {
+					result = 1;
+					break;
+				}
+			} else {
+				if (insert_string_tty(arg) != 0) {
+					result = 1;
+					break;
+				}
+			}
+		}
+	}
+	
+	// Cleanup TTY mode if needed
+	if (!gui_mode) {
+		if (restore_echo(fd, &original_termios)) {
+			close(fd);
+			return 1;
+		}
+		close(fd);
+	}
+	
+	return result;
 }
 
 int disable_echo(int fd, struct termios *original_termios) {
@@ -213,26 +287,47 @@ int insert_text_tty(int argc, char *argv[], int escape_mode) {
 	}
 	
 	int result = 0;
-	int first_arg = 1;
 	
-	// Skip option flags
-	while (first_arg < argc && 
-	      (strcmp(argv[first_arg], "-g") == 0 || 
-	       strcmp(argv[first_arg], "-e") == 0 || 
-	       strcmp(argv[first_arg], "--escapes") == 0)) {
-		first_arg++;
+	// Find the starting index for text arguments
+	int start_index = 1;
+	int option_end = 0;
+	
+	for (int i = 1; i < argc && !option_end; i++) {
+		if (strcmp(argv[i], "--") == 0) {
+			// End of options marker
+			start_index = i + 1;
+			option_end = 1;
+			break; // Stop processing options immediately
+		} else if (strcmp(argv[i], "-g") == 0 || 
+				  strcmp(argv[i], "-e") == 0 || 
+				  strcmp(argv[i], "--escapes") == 0) {
+			// Skip known options
+			if (i == start_index) start_index++;
+		} else if (argv[i][0] != '-') {
+			// First non-option argument
+			start_index = i;
+			break;
+		} else {
+			// Unknown option - skip it (already handled in main)
+			if (i == start_index) start_index++;
+		}
 	}
 	
-	for (size_t ai = first_arg; ai < argc; ai++) {
+	for (size_t ai = start_index; ai < argc; ai++) {
 		const char *s = argv[ai];
 		
-		// Skip option flags that might be in the middle
-		if (strcmp(s, "-g") == 0 || strcmp(s, "-e") == 0 || strcmp(s, "--escapes") == 0) {
-			continue;
+		// Add space between arguments except before the first one
+		if (ai > start_index) {
+			if (ioctl(fd, TIOCSTI, " ") == -1) {
+				perror("ioctl");
+				result = 1;
+				break;
+			}
 		}
 		
 		// Add space between arguments except before the first one
-		if (ai > first_arg) {
+		// I'm not sure if this ai >= start_index is correct
+		if (ai >= start_index) {
 			if (ioctl(fd, TIOCSTI, " ") == -1) {
 				perror("ioctl");
 				result = 1;
@@ -286,7 +381,7 @@ int insert_text_tty(int argc, char *argv[], int escape_mode) {
 }
 
 #ifdef GUI_SUPPORT
-int insert_text_x11(const char* text, int escape_mode) {
+int insert_string_x11(const char* text, int escape_mode) {
     // Process escape sequences if needed
     char* processed_text = NULL;
     if (escape_mode) {
@@ -378,3 +473,59 @@ int insert_text_x11(const char* text, int escape_mode) {
     return 0;
 }
 #endif
+
+/* Function to insert a single character into the TTY */
+int insert_char_tty(char c) {
+    int fd = open("/dev/tty", O_RDWR);
+    if (fd == -1) {
+        perror("open");
+        return 1;
+    }
+    
+    int result = 0;
+    if (ioctl(fd, TIOCSTI, &c) == -1) {
+        perror("ioctl");
+        result = 1;
+    }
+    
+    close(fd);
+    return result;
+}
+
+/* Function to insert a string into the TTY */
+int insert_string_tty(const char* str) {
+    int fd = open("/dev/tty", O_RDWR);
+    if (fd == -1) {
+        perror("open");
+        return 1;
+    }
+    
+    int result = 0;
+    size_t len = strlen(str);
+    
+    for (size_t i = 0; i < len; i++) {
+        if (ioctl(fd, TIOCSTI, &str[i]) == -1) {
+            perror("ioctl");
+            result = 1;
+            break;
+        }
+    }
+    
+    close(fd);
+    return result;
+}
+
+/* Function to process escape sequences and insert the result into the TTY */
+int insert_string_tty_with_escapes(const char* str) {
+    int error = 0;
+    char* processed = process_escape_sequences(str, &error);
+    
+    if (error != 0) {
+        return error;
+    }
+    
+    int result = insert_string_tty(processed);
+    free(processed);
+    return result;
+}
+
