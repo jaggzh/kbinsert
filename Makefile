@@ -1,6 +1,9 @@
 X11LIBS=-lX11 -lXtst
 
-all: kbinsert kbinsertx
+all: kinject kbinsert kbinsertx
+
+kinject: kinject.c
+	gcc -Wall -o kinject kinject.c
 
 kbinsert: kbinsert.c
 	gcc -o kbinsert kbinsert.c
@@ -15,4 +18,4 @@ run_debug: debug
 	gdb ./kbinsert
 
 vi:
-	vim README.md Makefile kbinsert.c
+	vim README.md Makefile kinject.c kbinsert.c
